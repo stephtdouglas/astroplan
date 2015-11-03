@@ -166,6 +166,7 @@ class AltitudeConstraint(Constraint):
     .. note::
         This can misbehave if you try to constrain negative altitudes, as
         the `~astropy.coordinates.AltAz` frame tends to mishandle negative
+        altitudes in the presence of atmospheric corrections.
 
 
     Parameters
