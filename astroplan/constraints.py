@@ -199,7 +199,6 @@ class AltitudeConstraint(Constraint):
         else:
             return _rescale_minmax(alt, self.min, self.max)
 
-
 class AirmassConstraint(AltitudeConstraint):
     """
     Constrain the airmass of a target.
