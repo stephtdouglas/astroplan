@@ -343,7 +343,7 @@ class PriorityScheduler(Scheduler):
 
         new_blocks = []
         unscheduled_blocks = []
-        # Compute the optimal observation time in priority order
+        # Loop over the list in priority order
         for i in sorted_indices:
             b = blocks[i]
             print(b.target)
