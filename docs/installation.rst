@@ -14,13 +14,15 @@ It requires Python 2.7 or 3.3+ (2.6 and 3.2 or earlier are not
 supported) as well as the following packages:
 
 * `Numpy`_
-* `Astropy`_
+* `Astropy`_ (v1.0.4 or later)
 * `pytz`_
 
 Optional packages:
 
 * `PyEphem`_
 * `Matplotlib`_
+* `WCSAxes`_
+* `astroquery`_
 
 First-time Python users may want to consider an all-in-one Python installation
 package, such as the `Anaconda Python Distribution

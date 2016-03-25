@@ -7,6 +7,7 @@ import numpy as np
 import astropy.units as u
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, get_sun
+from astropy.utils import minversion
 
 from ..moon import get_moon
 from ..observer import Observer
@@ -22,6 +23,8 @@ try:
     HAS_PYEPHEM = True
 except ImportError:
     HAS_PYEPHEM = False
+
+APY_LT104 = not minversion('astropy','1.0.4')
 
 vega = FixedTarget(coord=SkyCoord(ra=279.23473479*u.deg, dec=38.78368896*u.deg),
                    name="Vega")
@@ -58,7 +61,9 @@ def test_observability_table():
     targets = [vega, rigel, polaris]
 
     time_range = Time(['2001-02-03 04:05:06', '2001-02-04 04:05:06'])
-    constraints = [AtNightConstraint(), AirmassConstraint(3)]
+    # note that this uses the AirmassConstraint in None min mode - that means
+    # targets below the horizon will pass the airmass constraint
+    constraints = [AtNightConstraint(), AirmassConstraint(3, None)]
 
     obstab = observability_table(constraints, subaru, targets,
                                  time_range=time_range)
@@ -115,7 +120,8 @@ def test_compare_airmass_constraint_and_observer():
 
         max_airmass = 2
         # Check if each target meets airmass constraint in using Observer
-        always_from_observer = [all([subaru.altaz(time, target).secz < max_airmass
+        always_from_observer = [all([(subaru.altaz(time, target).secz < max_airmass)&
+                                     (subaru.altaz(time, target).secz > 0)
                                      for time in time_grid_from_range(time_range)])
                                 for target in targets]
         # Check if each target meets altitude constraints using
@@ -126,7 +132,8 @@ def test_compare_airmass_constraint_and_observer():
 
         assert all(always_from_observer == always_from_constraint)
 
-
+#in astropy before v1.0.4, a recursion error is triggered by this test
+@pytest.mark.skipif('APY_LT104')
 def test_sun_separation():
     time = Time('2003-04-05 06:07:08')
     apo = Observer.at_site("APO")
@@ -314,3 +321,19 @@ def test_docs_example():
                                   time_range=time_range)
 
     assert all(observability == [False, False, True, False, False, False])
+
+def test_regression_airmass_141():
+    subaru = Observer.at_site("Subaru")
+    time = Time('2001-1-1 12:00')
+
+    coord = SkyCoord(ra=16*u.hour, dec=20*u.deg)
+
+    assert subaru.altaz(time, coord).alt < 0*u.deg
+    # ok, it's below the horizon, so it *definitely* should fail an airmass
+    # constraint of being above 2.  So both of these should give False:
+    consmax = AirmassConstraint(2)
+    consminmax = AirmassConstraint(2, 1)
+
+    assert not consminmax(subaru, [coord], [time]).ravel()[0]
+    # prior to 141 the above works, but the below FAILS
+    assert not consmax(subaru, [coord], [time]).ravel()[0]
