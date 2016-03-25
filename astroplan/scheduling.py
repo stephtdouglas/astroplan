@@ -16,8 +16,8 @@ from astropy.time import Time
 
 from .utils import time_grid_from_range
 
-__all__ = ['ObservingBlock', 'TransitionBlock', 'GreedyScheduler',
-           'Scheduler', 'SequentialScheduler', 'Transitioner']
+__all__ = ['ObservingBlock', 'TransitionBlock', 'Scheduler',
+           'SequentialScheduler', 'PriorityScheduler', 'Transitioner']
 
 class ObservingBlock(object):
     """
@@ -27,7 +27,7 @@ class ObservingBlock(object):
     ----------
     target: `FixedObject'
 
-    duration: 
+    duration:
         exposure time
 
     priority: integer or float
@@ -86,7 +86,7 @@ class TransitionBlock(object):
 
     def __repr__(self):
         orig_repr = object.__repr__(self)
-        comp_info = ', '.join(['{0}: {1}'.format(c, t) 
+        comp_info = ', '.join(['{0}: {1}'.format(c, t)
                                for c, t in self.components.items()])
         if self.start_time is None or self.end_time is None:
             return orig_repr.replace('object at', ' ({0}, unscheduled) at'.format(comp_info))
@@ -266,10 +266,10 @@ class SequentialScheduler(Scheduler):
 
         return new_blocks, True
 
-class GreedyScheduler(Scheduler):
+class PriorityScheduler(Scheduler):
     """
     A scheduler that optimizes a prioritized list.  That is, it
-    finds the best time for each object in order of priority. 
+    finds the best time for each ObservingBlock, in order of priority.
 
     Parameters
     ----------
@@ -283,9 +283,13 @@ class GreedyScheduler(Scheduler):
     observer : `astroplan.Observer`
         The observer/site to do the scheduling for.
     transitioner : `Transitioner` or None
-        The object to use for computing transition times between blocks
+        The object to use for computing transition times between blocks.
+        Not currently used in this Scheduler.
     gap_time : `Quantity` with time units
         The minimal spacing to try over a gap where nothing can be scheduled.
+    slew_time : `Quanitity` with time units
+        The time required between observations.
+        Used instead of transitioner (for now)
 
     """
     @u.quantity_input(gap_time=u.second)
@@ -310,6 +314,9 @@ class GreedyScheduler(Scheduler):
         return cls(start_time, end_time, **kwargs)
 
     def _make_schedule(self, blocks):
+
+        # Combine individual constraints with global constraints, and
+        # retrieve priorities from each block to define scheduling order
         block_priorities = np.zeros(len(blocks))
         for i,b in enumerate(blocks):
             if b.constraints is None:
@@ -324,14 +331,14 @@ class GreedyScheduler(Scheduler):
 
         new_blocks = []
         unscheduled_blocks = []
-        # Loop over the list in priority order
+        # Compute the optimal observation time in priority order
         for i in sorted_indices:
             b = blocks[i]
             print(b.target)
 
-            # Exposure time plus overheads 
+            # Exposure time plus overheads
             time_required = (b.duration+self.slew_time).to(u.hour)
-            
+
             # Generate grid of possible time slots, and a mask for previous observations
             times = time_grid_from_range([self.start_time,self.end_time],
                                          time_resolution=time_required)
@@ -359,19 +366,19 @@ class GreedyScheduler(Scheduler):
                 print("could not schedule")
                 continue
             else:
-                # pick the first 
+                # pick the first
                 best_time_idx = np.argmax(constraint_scores)
                 new_start_time = times[best_time_idx]
 
             # now assign the block itself times and add it to the schedule
             newb = b
             newb.start_time = new_start_time
-            newb.end_time = new_start_time + b.duration
+            newb.end_time = new_start_time + time_required
             newb.constraints = b._all_constraints
             print(newb.start_time,newb.end_time)
 
             new_blocks.append(newb)
-            
+
         already_sorted = False
         return new_blocks, already_sorted
 
@@ -379,7 +386,7 @@ class GreedyScheduler(Scheduler):
 
 class Transitioner(object):
     """
-    A class that defines how to compute transition times from one block to 
+    A class that defines how to compute transition times from one block to
     another.
 
     Parameters
@@ -401,7 +408,7 @@ class Transitioner(object):
     def __call__(self, oldblock, newblock, start_time, observer):
         """
         Determines the amount of time needed to transition from one observing
-        block to another.  This uses the parameters defined in 
+        block to another.  This uses the parameters defined in
         ``self.instrument_reconfig_times``.
 
         Parameters
@@ -413,7 +420,7 @@ class Transitioner(object):
         start_time : `~astropy.time.Time`
             The time the transition should start
         observer : `astroplan.Observer`
-            The observer at the time 
+            The observer at the time
 
         Returns
         -------
@@ -431,7 +438,7 @@ class Transitioner(object):
             aaz = _get_altaz(Time([start_time]), observer, [oldblock.target, newblock.target])['altaz']
             # TODO: make this [0] unnecessary by fixing _get_altaz to behave well in scalar-time case
             sep = aaz[0].separation(aaz[1])[0]
-            
+
             components['slew_time'] = sep / self.slew_rate
         if self.instrument_reconfig_times is not None:
             components.update(self.compute_instrument_transitions(oldblock, newblock))
@@ -453,8 +460,3 @@ class Transitioner(object):
                             s = '{0}:{1} to {2}'.format(conf_name, old_conf, new_conf)
                             components[s] = ctime
             return components
-
-
-
-
-
