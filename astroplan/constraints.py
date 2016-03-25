@@ -177,7 +177,7 @@ class AltitudeConstraint(Constraint):
         Maximum altitude of the target. `None` indicates no limit.
     boolean_constraint : bool
         If True, the constraint is treated as a boolean (True for within the
-        limits and False for outside).  If False, the constraint returns a 
+        limits and False for outside).  If False, the constraint returns a
         float on [0, 1], where 0 is the min altitude and 1 is the max.
     """
     def __init__(self, min=None, max=None, boolean_constraint=True):
@@ -254,10 +254,10 @@ class AirmassConstraint(AltitudeConstraint):
                                  "is None")
             else:
                 mx = self.max
+
             mi = 1 if self.min is None else self.min
             # we reverse order so that airmass close to 1/min is good
-            return 1 - _rescale_minmax(secz, mi, mx)
-
+            return _rescale_airmass(secz, mi, mx)
 
 class AtNightConstraint(Constraint):
     """
@@ -269,14 +269,13 @@ class AtNightConstraint(Constraint):
         Parameters
         ----------
         max_solar_altitude : `~astropy.units.Quantity`
-            Define "night" as when the sun is below ``max_solar_altitude``.
-            Default is zero degrees altitude.
-
+            The altitude of the sun below which it is considered to be "night"
+            (inclusive).
         force_pressure_zero : bool (optional)
             Force the pressure to zero for solar altitude calculations. This
             avoids errors in the altitude of the Sun that can occur when the
             Sun is below the horizon and the corrections for atmospheric
-            refraction return nonsense values. Default is `True`.
+            refraction return nonsense values.
         """
         self.max_solar_altitude = max_solar_altitude
         self.force_pressure_zero = force_pressure_zero
@@ -331,7 +330,7 @@ class AtNightConstraint(Constraint):
     def compute_constraint(self, times, observer, targets):
         sun_altaz = self._get_solar_altitudes(times, observer, targets)
         solar_altitude = sun_altaz['altitude']
-        mask = solar_altitude < self.max_solar_altitude
+        mask = solar_altitude <= self.max_solar_altitude
         return mask
 
 
@@ -344,27 +343,28 @@ class SunSeparationConstraint(Constraint):
         Parameters
         ----------
         min : `~astropy.units.Quantity` or `None` (optional)
-            Minimum acceptable separation between Sun and target. `None`
-            indicates no limit.
+            Minimum acceptable separation between Sun and target (inclusive).
+            `None` indicates no limit.
         max : `~astropy.units.Quantity` or `None` (optional)
-            Minimum acceptable separation between Sun and target. `None`
-            indicates no limit.
+            Minimum acceptable separation between Sun and target (inclusive).
+            `None` indicates no limit.
         """
         self.min = min
         self.max = max
 
     def compute_constraint(self, times, observer, targets):
-        sun = get_sun(times)
-        targets = [target.coord if hasattr(target, 'coord') else target
+        sunaltaz = observer.altaz(times, get_sun(times))
+        target_coos = [target.coord if hasattr(target, 'coord') else target
                    for target in targets]
-        solar_separation = Angle([sun.separation(target) for target in targets])
+        target_altazs = [observer.altaz(times, coo) for coo in target_coos]
+        solar_separation = Angle([sunaltaz.separation(taa) for taa in target_altazs])
         if self.min is None and self.max is not None:
-            mask = self.max > solar_separation
+            mask = self.max >= solar_separation
         elif self.max is None and self.min is not None:
-            mask = self.min < solar_separation
+            mask = self.min <= solar_separation
         elif self.min is not None and self.max is not None:
-            mask = ((self.min < solar_separation) &
-                    (solar_separation < self.max))
+            mask = ((self.min <= solar_separation) &
+                    (solar_separation <= self.max))
         else:
             raise ValueError("No max and/or min specified in "
                              "SunSeparationConstraint.")
@@ -380,11 +380,11 @@ class MoonSeparationConstraint(Constraint):
         Parameters
         ----------
         min : `~astropy.units.Quantity` or `None` (optional)
-            Minimum acceptable separation between moon and target. `None`
-            indicates no limit.
+            Minimum acceptable separation between moon and target (inclusive).
+            `None` indicates no limit.
         max : `~astropy.units.Quantity` or `None` (optional)
-            Minimum acceptable separation between moon and target. `None`
-            indicates no limit.
+            Minimum acceptable separation between moon and target (inclusive).
+            `None` indicates no limit.
         """
         self.min = min
         self.max = max
@@ -404,12 +404,12 @@ class MoonSeparationConstraint(Constraint):
         # Relevant PR: https://github.com/astropy/astropy/issues/4033
 #        moon_separation = Angle([moon.separation(target) for target in targets])
         if self.min is None and self.max is not None:
-            mask = self.max > moon_separation
+            mask = self.max >= moon_separation
         elif self.max is None and self.min is not None:
-            mask = self.min < moon_separation
+            mask = self.min <= moon_separation
         elif self.min is not None and self.max is not None:
-            mask = ((self.min < moon_separation) &
-                    (moon_separation < self.max))
+            mask = ((self.min <= moon_separation) &
+                    (moon_separation <= self.max))
         else:
             raise ValueError("No max and/or min specified in "
                              "MoonSeparationConstraint.")
@@ -425,11 +425,11 @@ class MoonIlluminationConstraint(Constraint):
         Parameters
         ----------
         min : float or `None` (optional)
-            Minimum acceptable fractional illumination. `None` indicates no
-            limit.
+            Minimum acceptable fractional illumination (inclusive). `None`
+            indicates no limit.
         max : float or `None` (optional)
-            Maximum acceptable fractional illumination. `None` indicates no
-            limit.
+            Maximum acceptable fractional illumination (inclusive). `None`
+            indicates no limit.
         """
         self.min = min
         self.max = max
@@ -438,12 +438,12 @@ class MoonIlluminationConstraint(Constraint):
         illumination = np.array(moon_illumination(times,
                                                   observer.location))
         if self.min is None and self.max is not None:
-            mask = self.max > illumination
+            mask = self.max >= illumination
         elif self.max is None and self.min is not None:
-            mask = self.min < illumination
+            mask = self.min <= illumination
         elif self.min is not None and self.max is not None:
-            mask = ((self.min < illumination) &
-                    (illumination < self.max))
+            mask = ((self.min <= illumination) &
+                    (illumination <= self.max))
         else:
             raise ValueError("No max and/or min specified in "
                              "MoonSeparationConstraint.")
@@ -459,10 +459,10 @@ class LocalTimeConstraint(Constraint):
         Parameters
         ----------
         min : `~datetime.time`
-            Earliest local time. `None` indicates no limit.
+            Earliest local time (inclusive). `None` indicates no limit.
 
         max : `~datetime.time`
-            Latest local time. `None` indicates no limit.
+            Latest local time (inclusive). `None` indicates no limit.
 
         Examples
         --------
@@ -516,12 +516,12 @@ class LocalTimeConstraint(Constraint):
 
         # If time limits occur on same day:
         if self.min < self.max:
-            mask = [min_time < t.datetime.time() < max_time for t in times]
+            mask = [min_time <= t.datetime.time() <= max_time for t in times]
 
         # If time boundaries straddle midnight:
         else:
-            mask = [(t.datetime.time() > min_time) or
-                    (t.datetime.time() < max_time) for t in times]
+            mask = [(t.datetime.time() >= min_time) or
+                    (t.datetime.time() <= max_time) for t in times]
 
         return mask
 
@@ -694,9 +694,22 @@ def observability_table(constraints, observer, targets, times=None,
     return tab
 
 def _rescale_minmax(vals, min_val, max_val):
+    """ Rescale altitude into an observability score."""
     rescaled = (vals - min_val) / (max_val - min_val)
     below = rescaled < 0
     above = rescaled > 1
     rescaled[below] = 0
     rescaled[above] = 1
+
     return rescaled
+
+def _rescale_airmass(vals, min_val, max_val):
+    """ Rescale airmass into an observability score."""
+    rescaled = (vals - min_val) / (max_val - min_val)
+    below = rescaled < 0
+    above = rescaled > 1
+    # In both cases, we want out-of-range airmasses to return a 0 score
+    rescaled[below] = 1
+    rescaled[above] = 1
+
+    return 1 - rescaled
