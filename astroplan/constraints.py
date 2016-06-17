@@ -28,7 +28,7 @@ __all__ = ["AltitudeConstraint", "AirmassConstraint", "AtNightConstraint",
            "is_observable", "is_always_observable", "time_grid_from_range",
            "SunSeparationConstraint", "MoonSeparationConstraint",
            "MoonIlluminationConstraint", "LocalTimeConstraint", "Constraint",
-           "observability_table"]
+           "observability_table", "months_observable"]
 
 
 def _get_altaz(times, observer, targets,
@@ -172,9 +172,9 @@ class AltitudeConstraint(Constraint):
     Parameters
     ----------
     min : `~astropy.units.Quantity` or `None`
-        Minimum altitude of the target. `None` indicates no limit.
+        Minimum altitude of the target (inclusive). `None` indicates no limit.
     max : `~astropy.units.Quantity` or `None`
-        Maximum altitude of the target. `None` indicates no limit.
+        Maximum altitude of the target (inclusive). `None` indicates no limit.
     boolean_constraint : bool
         If True, the constraint is treated as a boolean (True for within the
         limits and False for outside).  If False, the constraint returns a
@@ -190,15 +190,18 @@ class AltitudeConstraint(Constraint):
         else:
             self.max = max
 
+        self.boolean_constraint = boolean_constraint
+
     def compute_constraint(self, times, observer, targets):
         cached_altaz = _get_altaz(times, observer, targets)
         alt = cached_altaz['altaz'].alt
         if self.boolean_constraint:
-            lowermask = self.min < alt
-            uppermask = alt < self.max
+            lowermask = self.min <= alt
+            uppermask = alt <= self.max
             return lowermask & uppermask
         else:
             return _rescale_minmax(alt, self.min, self.max)
+
 
 class AirmassConstraint(AltitudeConstraint):
     """
@@ -228,7 +231,7 @@ class AirmassConstraint(AltitudeConstraint):
 
         AirmassConstraint(2)
     """
-    def __init__(self, max=None, min=None, boolean_constraint=True):
+    def __init__(self, max=None, min=1, boolean_constraint=True):
         self.min = min
         self.max = max
         self.boolean_constraint = boolean_constraint
@@ -238,11 +241,11 @@ class AirmassConstraint(AltitudeConstraint):
         secz = cached_altaz['altaz'].secz
         if self.boolean_constraint:
             if self.min is None and self.max is not None:
-                mask = secz < self.max
+                mask = secz <= self.max
             elif self.max is None and self.min is not None:
-                mask = self.min < secz
+                mask = self.min <= secz
             elif self.min is not None and self.max is not None:
-                mask = (self.min < secz) & (secz < self.max)
+                mask = (self.min <= secz) & (secz <= self.max)
             else:
                 raise ValueError("No max and/or min specified in "
                                  "AirmassConstraint.")
@@ -382,7 +385,7 @@ class MoonSeparationConstraint(Constraint):
             Minimum acceptable separation between moon and target (inclusive).
             `None` indicates no limit.
         max : `~astropy.units.Quantity` or `None` (optional)
-            Minimum acceptable separation between moon and target (inclusive).
+            Maximum acceptable separation between moon and target (inclusive).
             `None` indicates no limit.
         """
         self.min = min
@@ -528,8 +531,9 @@ class LocalTimeConstraint(Constraint):
 def is_always_observable(constraints, observer, targets, times=None,
                          time_range=None, time_grid_resolution=0.5*u.hour):
     """
-    Are the ``targets`` always observable throughout ``time_range`` given
-    constraints in ``constraints_list`` for ``observer``?
+    A function to determine whether ``targets`` are always observable throughout
+    ``time_range`` given constraints in the ``constraints_list`` for a
+    particular ``observer``.
 
     Parameters
     ----------
@@ -576,8 +580,8 @@ def is_always_observable(constraints, observer, targets, times=None,
 def is_observable(constraints, observer, targets, times=None,
                   time_range=None, time_grid_resolution=0.5*u.hour):
     """
-    Are the ``targets`` observable during ``time_range`` given constraints in
-    ``constraints_list`` for ``observer``?
+    Determines if the ``targets`` are observable during ``time_range`` given
+    constraints in ``constraints_list`` for a particular ``observer``.
 
     Parameters
     ----------
@@ -619,6 +623,72 @@ def is_observable(constraints, observer, targets, times=None,
                            for constraint in constraints]
     contraint_arr = np.logical_and.reduce(applied_constraints)
     return np.any(contraint_arr, axis=1)
+
+
+def months_observable(constraints, observer, targets,
+                      time_grid_resolution=0.5*u.hour):
+    """
+    Determines which month the specified ``targets`` are observable for a
+    specific ``observer``, given the supplied ``constriants``.
+
+    Parameters
+    ----------
+    constraints : list or `~astroplan.constraints.Constraint`
+        Observational constraint(s)
+
+    observer : `~astroplan.Observer`
+        The observer who has constraints ``constraints``
+
+    targets : {list, `~astropy.coordinates.SkyCoord`, `~astroplan.FixedTarget`}
+        Target or list of targets
+
+    times : `~astropy.time.Time` (optional)
+        Array of times on which to test the constraint
+
+    time_range : `~astropy.time.Time` (optional)
+        Lower and upper bounds on time sequence, with spacing
+        ``time_resolution``. This will be passed as the first argument into
+        `~astroplan.time_grid_from_range`.
+
+    time_resolution : `~astropy.units.Quantity` (optional)
+        If ``time_range`` is specified, determine whether constraints are met
+        between test times in ``time_range`` by checking constraint at
+        linearly-spaced times separated by ``time_resolution``. Default is 0.5
+        hours.
+
+    Returns
+    -------
+    observable_months : list
+        List of sets of unique integers representing each month that a target is
+        observable, one set per target. These integers are 1-based so that
+        January maps to 1, February maps to 2, etc.
+
+    """
+    #TODO: This method could be sped up a lot by dropping to the trigonometric
+    #altitude calculations.
+    if not hasattr(constraints, '__len__'):
+        constraints = [constraints]
+
+    # Calculate throughout the year of 2014 so as not to require forward
+    # extrapolation off of the IERS tables
+    time_range = Time(['2014-01-01', '2014-12-31'])
+    times = time_grid_from_range(time_range, time_grid_resolution)
+
+    # TODO: This method could be sped up a lot by dropping to the trigonometric
+    # altitude calculations.
+
+    applied_constraints = [constraint(observer, targets,
+                                      times=times)
+                           for constraint in constraints]
+    contraint_arr = np.logical_and.reduce(applied_constraints)
+
+    months_observable = []
+    for target, observable in zip(targets, contraint_arr):
+        s = set([t.datetime.month for t in times[observable]])
+        months_observable.append(s)
+
+    return months_observable
+
 
 def observability_table(constraints, observer, targets, times=None,
                         time_range=None, time_grid_resolution=0.5*u.hour):
